@@ -216,7 +216,7 @@ index 6318e26..4c6f530 100644
          ++wait_cursor;
      }
 diff --git a/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp b/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
-index 18476d4..32a2128 100644
+index 18476d4..943d5c7 100644
 --- a/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
 +++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp
 @@ -8,6 +8,9 @@
@@ -237,9 +237,14 @@ index 18476d4..32a2128 100644
  #include "video_core/renderer_vulkan/vk_runtime.h"
  #include "video_core/renderer_vulkan/vk_scheduler.h"
  #include "video_core/texture_cache/texture_cache.h"
-@@ -148,6 +152,15 @@ void BufferCache::ExtendWriteFault(VAddr device_addr) {
+@@ -147,7 +151,20 @@ void BufferCache::ExtendWriteFault(VAddr device_addr) {
+     memory_tracker->ExtendWriteFault(Common::AlignDown(device_addr, window), window);
  }
  
++bool BufferCache::IsPageWriteWatched(VAddr device_addr) {
++    return memory_tracker->IsPageWriteWatched(device_addr);
++}
++
  void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks) {
 +    static const bool trace = std::getenv("BB_READBACK_TRACE") != nullptr;
 +    if (trace) {
@@ -253,7 +258,7 @@ index 18476d4..32a2128 100644
      const auto flush_request = [this, device_addr, size, is_write] {
          const u32 first_block = device_addr >> block_shift;
          const u32 last_block = (device_addr + size - 1) >> block_shift;
-@@ -173,6 +186,122 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
+@@ -173,6 +190,122 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
      }
  }
  
@@ -376,7 +381,7 @@ index 18476d4..32a2128 100644
  void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 size) {
      boost::container::small_vector<vk::BufferCopy, 1> copies;
      u64 total_size_bytes = 0;
-@@ -202,7 +331,10 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
+@@ -202,7 +335,10 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
          copy.dstOffset += download.offset;
      }
      runtime.CopyBuffer(arena, download.buffer, copies);
@@ -388,7 +393,7 @@ index 18476d4..32a2128 100644
  
      download.buffer->Invalidate(download.offset, download.size);
      for (const auto& copy : copies) {
-@@ -345,6 +477,10 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
+@@ -345,6 +481,10 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
      }
      if (is_written) {
          gpu_modified_ranges.Add(device_addr, size);
@@ -399,7 +404,7 @@ index 18476d4..32a2128 100644
      }
      return {arena, arena->Offset(device_addr)};
  }
-@@ -638,8 +774,26 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
+@@ -638,8 +778,26 @@ bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_a
              static constexpr u32 ZmaskUncompressed = 0xf;
              runtime.FillBuffer(arena, arena->Offset(device_addr), size, ZmaskUncompressed);
              return true;
@@ -428,7 +433,7 @@ index 18476d4..32a2128 100644
          }
      }
      // bbport: most texel buffers alias no image; remember misses until images change.
-@@ -727,6 +881,9 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
+@@ -727,6 +885,9 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
  
      info.AddWait(signal_sema, signal_tick);
      auto submit_result = instance.GetGraphicsQueue().bindSparse(sparse_info);
@@ -439,7 +444,7 @@ index 18476d4..32a2128 100644
  
      pending_binds.clear();
 diff --git a/gpu/shadps4/video_core/buffer_cache/buffer_cache.h b/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
-index 0ab18c2..8f8c4b0 100644
+index 0ab18c2..308c4c7 100644
 --- a/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
 +++ b/gpu/shadps4/video_core/buffer_cache/buffer_cache.h
 @@ -6,6 +6,9 @@
@@ -452,7 +457,17 @@ index 0ab18c2..8f8c4b0 100644
  #include <boost/container/small_vector.hpp>
  
  #include "common/interval_set.h"
-@@ -106,6 +109,11 @@ public:
+@@ -86,6 +89,9 @@ public:
+     /// bbport: a guest write fault at `device_addr` was handled; unprotect its neighbourhood.
+     void ExtendWriteFault(VAddr device_addr);
+ 
++    /// bbport: whether the buffer cache write-protects the page of `device_addr` (diagnostics).
++    [[nodiscard]] bool IsPageWriteWatched(VAddr device_addr);
++
+     /// Flushes any GPU modified buffer in the logical page range back to CPU memory.
+     void ReadMemory(VAddr device_addr, u64 size, bool is_write = false, bool assume_locks = false);
+ 
+@@ -106,6 +112,11 @@ public:
      /// Processes the fault buffer.
      void ProcessFaultBuffer();
  
@@ -464,7 +479,7 @@ index 0ab18c2..8f8c4b0 100644
      /// Synchronizes all buffers needed for DMA.
      void SynchronizeDmaBuffers();
  
-@@ -163,6 +171,10 @@ private:
+@@ -163,6 +174,10 @@ private:
      StreamBuffer stream_buffer;
      Buffer gds_buffer;
      RangeSet gpu_modified_ranges;
@@ -495,6 +510,42 @@ index f82967c..90c485a 100644
          scheduler.Wait(wait_tick);
          scheduler.PopPendingOperations();
      }
+diff --git a/gpu/shadps4/video_core/buffer_cache/memory_tracker.h b/gpu/shadps4/video_core/buffer_cache/memory_tracker.h
+index 0dc7eed..7bffb5e 100644
+--- a/gpu/shadps4/video_core/buffer_cache/memory_tracker.h
++++ b/gpu/shadps4/video_core/buffer_cache/memory_tracker.h
+@@ -62,6 +62,13 @@ public:
+                             });
+     }
+ 
++    /// bbport: see RegionManager::IsPageWriteWatched (read without the region lock).
++    bool IsPageWriteWatched(VAddr cpu_addr) noexcept {
++        return IteratePages<false>(cpu_addr, 1, [](RegionManager* manager, u64 offset, size_t) {
++            return manager->IsPageWriteWatched(offset);
++        });
++    }
++
+     /// Unmark region as modified from the host GPU
+     void UnmarkRegionAsGpuModified(VAddr dirty_cpu_addr, u64 query_size) noexcept {
+         IteratePages<false>(dirty_cpu_addr, query_size,
+diff --git a/gpu/shadps4/video_core/buffer_cache/region_manager.h b/gpu/shadps4/video_core/buffer_cache/region_manager.h
+index 49ed6ea..01fd663 100644
+--- a/gpu/shadps4/video_core/buffer_cache/region_manager.h
++++ b/gpu/shadps4/video_core/buffer_cache/region_manager.h
+@@ -126,6 +126,13 @@ public:
+         UpdateProtection<false, false>();
+     }
+ 
++    /// bbport: the page at `offset` is write-protected for this region, one of the page's
++    /// write watchers (diagnostics).
++    [[nodiscard]] bool IsPageWriteWatched(u64 offset) const noexcept {
++        const size_t page = SanitizeAddress(offset) / TRACKER_BYTES_PER_PAGE;
++        return page < NUM_PAGES_PER_REGION && !writeable.Get(page);
++    }
++
+     /**
+      * Loop over each page in the given range, turn off those bits and notify the tracker if
+      * needed. Call the given function on each turned off range.
 diff --git a/gpu/shadps4/video_core/host_shaders/CMakeLists.txt b/gpu/shadps4/video_core/host_shaders/CMakeLists.txt
 index 8c9d802..b087210 100644
 --- a/gpu/shadps4/video_core/host_shaders/CMakeLists.txt
@@ -647,6 +698,128 @@ index 0000000..941eb89
 +    const float d = texelFetch(depth_ms, ivec2(gl_FragCoord.xy), 0).r;
 +    out_color = vec4(d, 0.0, 0.0, 1.0);
 +}
+diff --git a/gpu/shadps4/video_core/page_manager.cpp b/gpu/shadps4/video_core/page_manager.cpp
+index ae12d05..343fddc 100644
+--- a/gpu/shadps4/video_core/page_manager.cpp
++++ b/gpu/shadps4/video_core/page_manager.cpp
+@@ -1,6 +1,9 @@
+ // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ 
++#include <atomic>
++#include <cstdio>
++#include <mutex>
+ #include <boost/container/small_vector.hpp>
+ #include "bbport_toggles.h"
+ #include "common/assert.h"
+@@ -93,6 +96,7 @@ struct PageManager::Impl {
+     static constexpr size_t NUM_ADDRESS_PAGES = 1ULL << (40 - PM_PAGE_BITS);
+     static constexpr size_t NUM_ADDRESS_LOCKS = NUM_ADDRESS_PAGES / PAGES_PER_LOCK;
+     inline static Vulkan::Rasterizer* rasterizer;
++    inline static Impl* instance; ///< bbport: for the signal handler (CheckWriteFaultProgress)
+ 
+     Impl() = default;
+     virtual ~Impl() = default;
+@@ -116,7 +120,11 @@ struct PageManager::Impl {
+         }
+         if (Common::IsWriteError(context)) {
+             BbStats::Timer timer{BbStats::t_write_faults};
+-            return rasterizer->OnWriteFault(addr, is_gpu_thread);
++            if (!rasterizer->OnWriteFault(addr, is_gpu_thread)) {
++                return false;
++            }
++            instance->CheckWriteFaultProgress(addr, is_gpu_thread);
++            return true;
+         } else {
+             BbStats::read_faults.fetch_add(1, std::memory_order_relaxed);
+             BbStats::Timer timer{BbStats::t_read_faults};
+@@ -125,6 +133,70 @@ struct PageManager::Impl {
+         return false;
+     }
+ 
++    // bbport: a handled write fault leaves its page writable, and the store goes ahead when the
++    // thread resumes. A page still protected after the caches were invalidated is held by a
++    // watcher neither cache found on the fault, or protected while no watcher counts it: the
++    // thread retried the store forever (Driveclub, car selection after a race: the main thread
++    // clearing a texture with memset spun at 100% on one page). After StuckWriteFaults such
++    // retries in a row the page is made writable. Its watchers stay counted, so it is
++    // protected again once they are all gone and something tracks it anew. The first cases
++    // are reported with what holds the page.
++    static constexpr u32 StuckWriteFaults = 64;
++
++    bool IsStillWriteProtected(VAddr page_addr) const {
++#ifdef _WIN64
++        MEMORY_BASIC_INFORMATION info{};
++        if (!VirtualQuery(reinterpret_cast<const void*>(page_addr), &info, sizeof(info))) {
++            return false;
++        }
++        constexpr DWORD Writable =
++            PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
++        return (info.Protect & Writable) == 0;
++#else
++        return cached_pages[page_addr >> PM_PAGE_BITS].num_write_watchers != 0;
++#endif
++    }
++
++    void CheckWriteFaultProgress(VAddr addr, bool is_gpu_thread) {
++        thread_local VAddr last_addr = 0;
++        thread_local u32 retries = 0;
++        if (addr != last_addr) {
++            last_addr = addr;
++            retries = 0;
++            return;
++        }
++        const VAddr page_addr = addr & ~VAddr(PM_PAGE_SIZE - 1);
++        if (!IsStillWriteProtected(page_addr)) {
++            retries = 0;
++            return;
++        }
++        if (++retries < StuckWriteFaults) {
++            return;
++        }
++        retries = 0;
++        const u64 page = page_addr >> PM_PAGE_BITS;
++        u32 write_watchers = 0;
++        u32 read_watchers = 0;
++        {
++            std::scoped_lock lk{locks[page / PAGES_PER_LOCK]};
++            write_watchers = cached_pages[page].num_write_watchers;
++            read_watchers = cached_pages[page].num_read_watchers;
++            Protect(page_addr, PM_PAGE_SIZE, Core::MemoryPermission::ReadWrite);
++        }
++        static std::atomic<u32> reports{0};
++        if (reports.fetch_add(1, std::memory_order_relaxed) >= 8) {
++            return;
++        }
++        const bool buffer_watch = rasterizer->GetBufferCache().IsPageWriteWatched(page_addr);
++        std::printf("GPU: a guest write at %#llx (%s thread) kept faulting: its page stayed "
++                    "protected after the caches were invalidated (%u write watchers, %u read; "
++                    "buffer cache watch: %s); page made writable\n",
++                    static_cast<unsigned long long>(addr), is_gpu_thread ? "GPU" : "guest",
++                    write_watchers, read_watchers, buffer_watch ? "yes" : "no");
++        rasterizer->GetTextureCache().ReportPage(page_addr);
++        std::fflush(stdout);
++    }
++
+     template <bool track, bool is_read>
+     void UpdatePageWatchers(VAddr addr, u64 size) {
+         RENDERER_TRACE;
+@@ -289,6 +361,7 @@ private:
+ public:
+     UffdImpl(Vulkan::Rasterizer* rasterizer_) : Impl() {
+         rasterizer = rasterizer_;
++        instance = this;
+         uffd = syscall(SYS_userfaultfd, O_CLOEXEC | O_NONBLOCK | UFFD_USER_MODE_ONLY);
+         if (uffd == -1) {
+             LOG_ERROR(Common_Memory,
+@@ -413,6 +486,7 @@ public:
+ struct SignalImpl : public PageManager::Impl {
+     SignalImpl(Vulkan::Rasterizer* rasterizer_) : Impl() {
+         rasterizer = rasterizer_;
++        instance = this;
+ 
+         // Should be called first.
+         constexpr auto priority = std::numeric_limits<u32>::min();
 diff --git a/gpu/shadps4/video_core/renderer_vulkan/host_passes/fsr_pass.cpp b/gpu/shadps4/video_core/renderer_vulkan/host_passes/fsr_pass.cpp
 index 4dd46cf..b61fb7f 100644
 --- a/gpu/shadps4/video_core/renderer_vulkan/host_passes/fsr_pass.cpp
@@ -3775,7 +3948,7 @@ index 5855a5c..c577d0d 100644
  };
  
 diff --git a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
-index 9692547..4b27efa 100644
+index 9692547..cbc213d 100644
 --- a/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
 +++ b/gpu/shadps4/video_core/texture_cache/texture_cache.cpp
 @@ -99,6 +99,7 @@ void TextureCache::DownloadImageMemory(ImageId image_id, bool sync) {
@@ -3786,6 +3959,102 @@ index 9692547..4b27efa 100644
          scheduler.Finish();
          download.Invalidate();
          Core::Memory::Instance()->TryWriteBacking(std::bit_cast<u8*>(image.info.guest_address),
+@@ -186,6 +187,34 @@ void TextureCache::UnmapMemory(VAddr cpu_addr, size_t size) {
+     }
+ }
+ 
++void TextureCache::ReportPage(VAddr page_addr) {
++    std::unique_lock lock{mutex, std::try_to_lock};
++    if (!lock.owns_lock()) {
++        std::printf("  textures on the page: not listed (cache busy)\n");
++        return;
++    }
++    u32 listed = 0;
++    if (const auto* image_ids = page_table.find(page_addr >> Traits::PageBits)) {
++        for (const ImageId image_id : *image_ids) {
++            const Image& image = slot_images[image_id];
++            if (!image.Overlaps(page_addr, 4_KB)) {
++                continue;
++            }
++            ++listed;
++            std::printf("  texture %u: %#llx-%#llx, tracked %#llx-%#llx, flags %#x\n",
++                        image_id.index, static_cast<unsigned long long>(image.info.guest_address),
++                        static_cast<unsigned long long>(image.info.guest_address +
++                                                        image.info.guest_size),
++                        static_cast<unsigned long long>(image.track_addr),
++                        static_cast<unsigned long long>(image.track_addr_end),
++                        static_cast<u32>(image.flags));
++        }
++    }
++    if (listed == 0) {
++        std::printf("  textures on the page: none\n");
++    }
++}
++
+ ImageId TextureCache::ResolveDepthOverlap(const ImageInfo& requested_info, BindingType binding,
+                                           ImageId cache_image_id) {
+     auto& cache_image = slot_images[cache_image_id];
+diff --git a/gpu/shadps4/video_core/texture_cache/texture_cache.h b/gpu/shadps4/video_core/texture_cache/texture_cache.h
+index f41af29..89f72f2 100644
+--- a/gpu/shadps4/video_core/texture_cache/texture_cache.h
++++ b/gpu/shadps4/video_core/texture_cache/texture_cache.h
+@@ -3,6 +3,7 @@
+ 
+ #pragma once
+ 
++#include <algorithm>
+ #include <array>
+ #include <atomic>
+ #include <chrono>
+@@ -114,6 +115,9 @@ public:
+     /// Evicts any images that overlap the unmapped range.
+     void UnmapMemory(VAddr cpu_addr, size_t size);
+ 
++    /// bbport: prints the images on a guest page and what each one tracks (diagnostics).
++    void ReportPage(VAddr page_addr);
++
+     /// Schedules a copy of pending images for download back to CPU memory.
+     void ProcessDownloadImages();
+ 
+@@ -290,6 +294,11 @@ public:
+     void ForEachImageInRegion(VAddr cpu_addr, size_t size, Func&& func) {
+         using FuncReturn = typename std::invoke_result<Func, ImageId, Image&>::type;
+         static constexpr bool BOOL_BREAK = std::is_same_v<FuncReturn, bool>;
++        // bbport: an image on several table pages is visited once, remembered here. The mark
++        // was the image's Picked flag, which all threads share: lookups made without `mutex`
++        // (FindImageFromRange, the stencil search in FindDepthTarget) set and clear it too, and
++        // flag updates made without the lock (GpuModified) can store a stale Picked back. A
++        // guest write fault then skipped the image and left its pages protected.
+         ImageIds images;
+         ForEachPage(cpu_addr, size, [this, &images, cpu_addr, size, func](u64 page) {
+             const auto it = page_table.find(page);
+@@ -301,14 +310,13 @@ public:
+                 }
+             }
+             for (const ImageId image_id : *it) {
+-                Image& image = slot_images[image_id];
+-                if (image.flags & ImageFlagBits::Picked) {
++                if (std::find(images.begin(), images.end(), image_id) != images.end()) {
+                     continue;
+                 }
++                Image& image = slot_images[image_id];
+                 if (!image.Overlaps(cpu_addr, size)) {
+                     continue;
+                 }
+-                image.flags |= ImageFlagBits::Picked;
+                 images.push_back(image_id);
+                 if constexpr (BOOL_BREAK) {
+                     if (func(image_id, image)) {
+@@ -322,9 +330,6 @@ public:
+                 return false;
+             }
+         });
+-        for (const ImageId image_id : images) {
+-            slot_images[image_id].flags &= ~ImageFlagBits::Picked;
+-        }
+     }
+ 
+ private:
 diff --git a/gpu/shim/bbgpu.cpp b/gpu/shim/bbgpu.cpp
 index 494d151..85c8231 100644
 --- a/gpu/shim/bbgpu.cpp
