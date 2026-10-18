@@ -22,6 +22,7 @@ from prepare import parse_self, span, unpack
 from link_libc import encode_id
 from cpu_compat import atomic_output, patch_image, patch_libc
 import extrq
+import resource_lock
 
 DEFAULT_MODULES = ('libc.prx', 'libSceFios2.prx')
 FS_LOAD = bytes.fromhex('64488b042500000000')  # mov rax, fs:[0]
@@ -306,6 +307,7 @@ def link(game, out, module_names=DEFAULT_MODULES, patched=()):
     cpu_compat['libc'] = libc_changes
     main_size = min((t['base'] for t in table), default=len(image))
     image, segments, cpu_compat['extrq'] = extrq.patch(image, segments, main_size, relocs)
+    image, segments, lock = resource_lock.patch(image, segments, main_size, relocs, patched)
     sites, analysis = None, None
     if red_zones_enabled():
         try:
@@ -339,7 +341,8 @@ def link(game, out, module_names=DEFAULT_MODULES, patched=()):
     report = dict(modules=[{k: (hex(v) if k in ('base', 'init', 'tls_address') else v) for k, v in t.items()} for t in table],
                   bindings=len(bindings), imports=len(names), fs_loads_patched=fs_patched,
                   main_tls=dict(zip(('vaddr', 'filesz', 'memsz', 'align'), main_tls_values)),
-                  unresolved_imports=unresolved, cpu_compat=cpu_compat, red_zone=red_zone)
+                  unresolved_imports=unresolved, cpu_compat=cpu_compat, red_zone=red_zone,
+                  resource_lock=lock)
     with atomic_output(out / 'link.json') as f:
         f.write((json.dumps(report, indent=2) + '\n').encode('utf-8'))
     if cpu_compat['enabled']:
@@ -356,6 +359,9 @@ def link(game, out, module_names=DEFAULT_MODULES, patched=()):
     if cpu_compat['extrq']['sites']:
         print(f"CPU compatibility: {cpu_compat['extrq']['sites']} SSE4a EXTRQ sites translated "
               f"for a CPU without SSE4a ({cpu_compat['extrq']['by_form']})")
+    if lock['applied']:
+        print('Resource lock: claims that race the exclusive pass back off (car selection freeze '
+              'after a race; DC_LOCK_PATCH=0 disables)')
     if red_zone['enabled']:
         print(f"Red zone: {red_zone['sites']}/{red_zone['available']} guest access sites run red-zone-safe "
               f"({len(red_zone['cpu_overlaps'])} left to CPU translations; BB_RED_ZONE=0 disables)")
